@@ -1,0 +1,111 @@
+name: Release builds
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  linux:
+    name: Linux x64 (deb + tar.gz)
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version-file: ".nvmrc"
+          cache: "npm"
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            fakeroot rpm dpkg-dev xz-utils zip unzip python3 \
+            build-essential libx11-dev libxkbfile-dev libsecret-1-dev desktop-file-utils
+
+      - name: Install npm dependencies
+        run: npm ci
+
+      - name: Build (hygiene + compile)
+        run: |
+          npx gulp hygiene
+          npx gulp compile
+
+      - name: Build Linux archives
+        run: |
+          npx gulp vscode-linux-x64-min
+          npx gulp vscode-linux-x64-archive
+
+      - name: Build Linux deb
+        run: |
+          npx gulp vscode-linux-x64-build-deb
+
+      - name: Collect artifacts
+        run: |
+          mkdir -p dist
+          find .build -type f \( -name "code-oss-*.tar.gz" -o -name "code-oss-*.deb" \) -print -exec cp {} dist/ \;
+          ls -lah dist
+          (cd dist && sha256sum * > SHA256SUMS.txt)
+
+      - name: Upload to GitHub Release (draft)
+        uses: softprops/action-gh-release@v2
+        with:
+          draft: true
+          files: |
+            dist/*
+
+  windows:
+    name: Windows x64 (zip + user-setup)
+    runs-on: windows-2022
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version-file: ".nvmrc"
+          cache: "npm"
+
+      - name: Install npm dependencies
+        run: npm ci
+
+      - name: Build (hygiene + compile)
+        run: |
+          npx gulp hygiene
+          npx gulp compile
+
+      - name: Build Windows archives
+        run: |
+          npx gulp vscode-win32-x64-archive
+          npx gulp vscode-win32-x64-user-setup
+
+      - name: Collect artifacts
+        shell: bash
+        run: |
+          mkdir -p dist
+          find .build -type f \( -name "code-oss-*.zip" -o -name "*UserSetup-*.exe" \) -print -exec cp {} dist/ \;
+          ls -lah dist
+          (cd dist && sha256sum * > SHA256SUMS.txt) || true
+
+      - name: Upload to GitHub Release (draft)
+        uses: softprops/action-gh-release@v2
+        with:
+          draft: true
+          files: |
+            dist/*
